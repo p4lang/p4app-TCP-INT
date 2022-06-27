@@ -1,0 +1,6 @@
+*.o
+*__pycache__
+src/tools/tcp_int
+src/bpf/tcp_int.skel.h
+include/vmlinux*
+tcp-int-exporter/src/tcp_int_exporter/tcp_int_exporter
