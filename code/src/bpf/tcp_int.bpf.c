@@ -14,12 +14,16 @@
 struct tcp_int_opt {
     __u8 kind;
     __u8 len;
+    /* XXX bit-fields are sent in reverse on the wire: */
+    unsigned linkspeed : 4;
+    unsigned tagfreqkey : 4;
     tcp_int_val intval;
-    tcp_int_val intvalecr;
     tcp_int_id id;
-    tcp_int_id idecr;
-    tcp_int_lat swlat;
-    tcp_int_lat swlatecr;
+    tcp_int_lat hoplat;
+    tcp_int_val intvalecr;
+    unsigned linkspeedecr : 4;
+    unsigned idecr : 4;
+    tcp_int_latecr hoplatecr;
 } __attribute__((packed));
 
 /* TCP INT configuration map */
@@ -32,10 +36,9 @@ struct {
 } map_tcp_int_config SEC(".maps");
 
 /* Perf events to user space */
-#define TCP_INT_MAX_CPUS 256
 struct {
     __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-    __uint(max_entries, TCP_INT_MAX_CPUS);
+    __uint(max_entries, TCP_INT_NUM_CPUS);
     __uint(key_size, sizeof(__u32));
     __uint(value_size, sizeof(__u32));
 } map_tcp_int_events SEC(".maps");
@@ -48,7 +51,7 @@ struct {
     __type(value, struct tcp_int_hist);
 } map_tcp_int_hists SEC(".maps");
 
-/* Per switch-ID histograms */
+/* Per hop-ID histograms */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, TCP_INT_MAX_PERID_HISTS);
@@ -72,22 +75,19 @@ static inline void tcp_int_reserve_hdr_opt(struct bpf_sock_ops *skops,
     bpf_reserve_hdr_opt(skops, size, 0);
 }
 
-static inline void tcp_int_add_tcpopt(struct bpf_sock_ops *skops,
-                                      struct tcp_int_state *istate)
+static inline int tcp_int_is_mode_hist(void)
 {
-    struct tcp_int_opt iopt = {0};
+    int key = TCP_INT_CONFIG_KEY_HIST_ENABLE;
+    tcp_int_config_value *ptr_enabled;
 
-    iopt.kind = TCP_INT_OPT_KIND;
-    iopt.len = sizeof(iopt);
-    iopt.intvalecr = istate->intvalecr;
-    iopt.idecr = istate->idecr;
-    iopt.swlatecr.u24 = istate->swlatecr.u24;
-
-    bpf_store_hdr_opt(skops, &iopt, sizeof(iopt), 0);
+    ptr_enabled = bpf_map_lookup_elem(&map_tcp_int_config, &key);
+    if (ptr_enabled)
+        return ptr_enabled->u64;
+    return 0;
 }
 
 static inline void tcp_int_update_hist(enum tcp_int_hist_type type,
-                                       tcp_int_id sid, __u64 val, bool linear)
+                                       tcp_int_id hid, __u64 val, bool linear)
 {
     struct tcp_int_hist_perid *hist_perid_ptr;
     struct tcp_int_hist *hist_ptr;
@@ -99,16 +99,47 @@ static inline void tcp_int_update_hist(enum tcp_int_hist_type type,
         return;
     }
 
-    if (sid >= TCP_INT_MAX_PERID_HISTS) {
-        sid = TCP_INT_MAX_PERID_HISTS - 1;
+    if (hid >= TCP_INT_MAX_PERID_HISTS) {
+        hid = TCP_INT_MAX_PERID_HISTS - 1;
     }
 
     slot = linear ? val : log2l(val);
     if (slot >= TCP_INT_HIST_MAX_SLOTS) {
         slot = TCP_INT_HIST_MAX_SLOTS - 1;
     }
-    __sync_fetch_and_add(&(hist_perid_ptr->hist[sid].slots[slot]), 1);
+    __sync_fetch_and_add(&(hist_perid_ptr->hist[hid].slots[slot]), 1);
     __sync_fetch_and_add(&hist_ptr->slots[slot], 1);
+}
+
+static inline void tcp_int_add_tcpopt(struct bpf_sock_ops *skops,
+                                      struct tcp_int_state *istate)
+{
+    struct tcp_int_opt iopt = {0};
+    __u64 val;
+
+    iopt.kind = TCP_INT_OPT_KIND;
+    iopt.len = sizeof(iopt);
+    iopt.intvalecr = istate->intvalecr;
+    iopt.idecr = istate->idecr;
+    iopt.hoplatecr = istate->hoplatecr;
+
+#if TCP_INT_ENABLE_DYNAMIC_TAGGING
+    if (skops->packets_out < 1)
+        iopt.tagfreqkey = TCP_INT_TAGFREQKEY_APPLIMITED;
+    else if (istate->qdepth > TCP_INT_CONG_QDEPTH_THRESH)
+        iopt.tagfreqkey = TCP_INT_TAGFREQKEY_CONGESTED;
+    else
+        iopt.tagfreqkey = TCP_INT_TAGFREQKEY_UNCONGESTED;
+#else
+    iopt.tagfreqkey = TCP_INT_TAGFREQKEY_SWITCH_DEFAULT;
+#endif // TCP_INT_ENABLE_DYNAMIC_TAGGING
+
+    bpf_store_hdr_opt(skops, &iopt, sizeof(iopt), 0);
+
+    if (tcp_int_is_mode_hist()) {
+        val = skops->skb_len >> TCP_INT_SKBLEN_BITSHIFT;
+        tcp_int_update_hist(TCP_INT_HIST_TYPE_TXSKBLEN, iopt.idecr, val, true);
+    }
 }
 
 static void tcp_int_update_hists(struct bpf_sock_ops *skops,
@@ -137,14 +168,17 @@ static void tcp_int_update_hists(struct bpf_sock_ops *skops,
                   TCP_INT_BYTES_IN_KBYTE;
             linear = false;
             break;
-        case TCP_INT_HIST_TYPE_SID:
+        case TCP_INT_HIST_TYPE_HID:
             val = iopt->idecr;
             linear = true;
             break;
-        case TCP_INT_HIST_TYPE_SWLAT:
-            val = be24tohl(iopt->swlatecr.u24)
-                  << TCP_INT_SWLAT_BITSHIFT; // shift back to nanoseconds;
+        case TCP_INT_HIST_TYPE_HLAT:
+            val = tcp_int_hoplatecr_to_ns(iopt->hoplatecr);
             linear = false;
+            break;
+        case TCP_INT_HIST_TYPE_RXSKBLEN:
+            val = skops->skb_len >> TCP_INT_SKBLEN_BITSHIFT;
+            linear = true;
             break;
         default:
             continue;
@@ -172,10 +206,12 @@ static void tcp_int_send_event(struct bpf_sock_ops *skops,
     event.mss = skops->mss_cache;
     event.lost_out = skops->lost_out;
     event.intval = iopt->intvalecr;
-    event.sid = iopt->idecr;
-    event.swlat = be24tohl(iopt->swlatecr.u24);
-    event.return_swlat = be24tohl(iopt->swlat.u24);
-
+    event.hid = iopt->idecr;
+    event.hoplat = iopt->hoplatecr;
+    event.return_hoplat = be24tohl(iopt->hoplat.u24);
+    event.segs_out = skops->segs_out;
+    event.bytes_acked = skops->bytes_acked;
+    event.total_retrans = skops->total_retrans;
     bpf_perf_event_output(skops, &map_tcp_int_events, BPF_F_CURRENT_CPU, &event,
                           sizeof(event));
 }
@@ -189,17 +225,6 @@ static inline int tcp_int_is_ecr_enabled(void)
     if (ptr_enabled)
         return !(ptr_enabled->u64);
     return 1;
-}
-
-static inline int tcp_int_is_mode_hist(void)
-{
-    int key = TCP_INT_CONFIG_KEY_HIST_ENABLE;
-    tcp_int_config_value *ptr_enabled;
-
-    ptr_enabled = bpf_map_lookup_elem(&map_tcp_int_config, &key);
-    if (ptr_enabled)
-        return ptr_enabled->u64;
-    return 0;
 }
 
 static inline int tcp_int_is_mode_trace(void)
@@ -228,6 +253,7 @@ static inline void tcp_int_process_tcpopt(struct bpf_sock_ops *skops,
                                           struct tcp_int_state *istate)
 {
     struct tcp_int_opt iopt = {};
+    bool _tcp_int_is_enabled; /* Optimization: cache tcp_int_is_enabled() */
     int rv;
 
     iopt.kind = TCP_INT_OPT_KIND;
@@ -240,8 +266,9 @@ static inline void tcp_int_process_tcpopt(struct bpf_sock_ops *skops,
     /* Request echo only if there is an update */
     if (iopt.id) {
         istate->intvalecr = iopt.intval;
-        istate->idecr = iopt.id;
-        istate->swlatecr.u24 = iopt.swlat.u24;
+        istate->idecr = tcp_int_id_to_idecr(iopt.id);
+        istate->hoplatecr =
+            tcp_int_hoplat_to_hoplatecr(be24tohl(iopt.hoplat.u24));
         istate->pending_ecr = true;
     }
 
@@ -255,10 +282,11 @@ static inline void tcp_int_process_tcpopt(struct bpf_sock_ops *skops,
     istate->qdepth =
         istate->qdepth + (tcp_int_ival_to_qdepth(iopt.intvalecr) >> 3);
 
-    if (tcp_int_is_enabled() && tcp_int_is_mode_hist()) {
+    _tcp_int_is_enabled = tcp_int_is_enabled();
+    if (_tcp_int_is_enabled && tcp_int_is_mode_hist()) {
         tcp_int_update_hists(skops, &iopt);
     }
-    if (tcp_int_is_enabled() && tcp_int_is_mode_trace()) {
+    if (_tcp_int_is_enabled && tcp_int_is_mode_trace()) {
         tcp_int_send_event(skops, &iopt);
     }
 }

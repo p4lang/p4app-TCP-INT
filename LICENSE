@@ -1,9 +1,9 @@
 All files in this project are:
 
-Copyright (c) 2021 Intel Corporation or Copyright 2021 Intel Corporation.
+Copyright (c) <years> Intel Corporation or Copyright 2021 Intel Corporation.
 All rights reserved.
 
-The files containing Copyright 2021 Intel Corporation and the
+The files containing Copyright <years> Intel Corporation and the
 following SPDX-License-Identifier line in a comment near the beginning:
 
     SPDX-License-Identifier: Apache-2.0
@@ -11,7 +11,7 @@ following SPDX-License-Identifier line in a comment near the beginning:
 are distributed under the Apache license shown below.
 
 
-The files containing Copyright (c) 2021 Intel Corporation and the
+The files containing Copyright (c) <years> Intel Corporation and the
 following SPDX-License-Identifier line in a comment near the beginning:
 
     SPDX-License-Identifier: GPL-2.0-only
@@ -19,7 +19,7 @@ following SPDX-License-Identifier line in a comment near the beginning:
 are distributed under the GNU General Public License, version 2.
 
 
-The files containing Copyright (c) 2021 Intel Corporation and the
+The files containing Copyright (c) <years> Intel Corporation and the
 following SPDX-License-Identifier line in a comment near the beginning:
 
     SPDX-License-Identifier: BSD-2-Clause

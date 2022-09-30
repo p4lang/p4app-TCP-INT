@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2021-2022 Intel Corporation
+# Copyright 2022 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
 # Automatically reindent all .c and .h source files in this project.

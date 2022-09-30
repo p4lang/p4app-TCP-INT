@@ -10,7 +10,7 @@ TCP-INT is implemented in the TCP header as a new TCP option with three fields:
 
  - INTval: the link utilization (or queue depth if utilization is 100%).
  - HopID: the ID of most congested switch (the packet’s TTL at the switch).
- - SWLat: the sum of latencies experienced at each hop.
+ - HopLat: the sum of latencies experienced across all hops.
 
 Each field has a corresponding echo-reply field (ecr) for the receiver to echo the telemetry back to
 the sender.
@@ -20,13 +20,13 @@ the sender.
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+---------------+---------------+---------------+---------------+
-|  Kind = 0x72  |  Length = 6   |    INTval     |     INTecr    |
-+---------------+---------------+---------------+----------------
-|  HopID=IP.TTL |    HopIDecr   |            SWLat (3B)       ...
-----------------+---------------+--------------------------------
- ...            |                  SWLatEcr (3B)                |
-----------------+-----------------------------------------------+
++---------------+---------------+-------+-------+---------------+
+|  Kind = 0x72  |  Length = 12  |TagFreq|LinkSpd|    INTval     |
++---------------+---------------+-------+-------+---------------+
+|  HopID=IP.TTL |                  HopLat (3B)                  |
++---------------+-------+-------+-------------------------------+
+|     INTEcr    |LnkSEcr| HIDEcr|        HopLatEcr (2B)         |
+----------------+-------+-------+-------------------------------+
 ```
 
 ### Workflow
@@ -35,7 +35,7 @@ the sender.
 - Upon receiving a packet with a TCP-INT header option, the switch updates the fields:
     - pkt.INTval = switch.INTval if switch.INTval > pkt.INTval
     - pkt.HopID = IP.TTL if switch.INTval > pkt.INTval
-    - pkt.SWLat += latency through this switch
+    - pkt.HopLat += latency through this switch
 - The eBPF receives the telemetry and (possibly) sends it to user-space for consumption.
 - When the ACK is sent, the eBPF sets the ecr fields to the latest INT received on the send path.
 
@@ -143,6 +143,26 @@ cgroup2 on /sys/fs/cgroup/unified type cgroup2 (rw,nosuid,nodev,noexec,relatime,
 # In this case you can simply create the 'unified' subdirectory or define a custom tcp-int cgroup path using the -c option.
 cgroup2 on /sys/fs/cgroup type cgroup2 (rw,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot)
 ```
+
+## Tagging policy
+The TCP-INT eBPF inserts a TCP header option in outgoing packets. The switch can "tag" the packet by setting the INT fields in the header option. If the switch were to tag every packet, it could interfere with generic receive offload (GRO) in the Linux TCP stack, possibly hurting performance. To avoid this interference, the switch can tag *some* of the packets -- enough to provide fresh telemetry, without hurting performance.
+
+### Tagging frequency
+Instead of tagging every packet, the switch can tag packets at a given frequency. For example, if the tagging frequency is 16, one in every 16 packets will be tagged. The switch implements this logic probabilistically, so it's possible -- but unlikely -- for two successive packets to be tagged. The packets will be tagged in *expectation* at the specified tagging frequency.
+
+To control the tagging frequency, the sender (eBPF) specifies the tagging frequency by setting the `tagfreqkey` field in the TCP header option. The switch uses `tagfreqkey` to decide whether to tag the packet.
+
+### Default (static) tagging policy
+By default, the tagging policy is to tag packets at a fixed tagging frequency. This tagging frequency is configured through the switch control plane. The sender requests the default tagging frequency by setting `tagfreqkey` to `TCP_INT_TAGFREQKEY_SWITCH_DEFAULT`.
+
+### Dynamic tagging policy
+Depending on network conditions and INT freshness requirements, the sender can dynamically change the tagging frequency. The current dynamic tagging policy identifies three states of a flow:
+
+- `APPLIMITED`: the application isn't calling send() fast enough, so the in-flight packets are far below the CWND.
+- `CONGESTED`: there's congestion in the network fabric.
+- `UNCONGESTED`: there's no fabric congestion and the flow isn't application limited.
+
+The thresholds for distinguishing these states, as well as the tagging frequency to use for each state, can be configured in `include/tcp_int_common.h`. The dynamic policy can be enabled through the `TCP_INT_ENABLE_DYNAMIC_TAGGING` define.
 
 ### Loading TCP-INT and running test applications
 

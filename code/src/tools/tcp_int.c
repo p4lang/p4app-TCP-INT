@@ -37,8 +37,9 @@ static const char *tcp_int_doc =
     "    tcp_int hist-int                               # Enables tcp-int and "
     "start histograming (INT-related histograms)\n"
     "    tcp_int hist-int-perid                         # Enables tcp-int and "
-    "start histograming (INT-related histograms per switch ID)\n"
-    "    tcp_int hist-[rtt,cwnd,qdepth,util,swlat,sid]  # Enables tcp-int and "
+    "start histograming (INT-related histograms per hop ID)\n"
+    "    tcp_int hist-[rtt,cwnd,qdepth,util,hoplat,\n"
+    "                  hid,rxskblen,txskblen]           # Enables tcp-int and "
     "start histograming (selected histogram)\n"
     "    tcp_int ecr-enable                             # Enables echo replies "
     "(default = enabled)\n"
@@ -583,12 +584,13 @@ static void tcp_int_handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
     inet_ntop(e->family, &e->saddr, saddr, sizeof(saddr));
     inet_ntop(e->family, &e->daddr, daddr, sizeof(daddr));
     printf("%11.6f, %15s:%5d, %15s:%5d, %8d, %8d, %6d, %8lld, %7u, %12u, %9f, "
-           "%3d\n",
+           "%3d, %11d, %21lld\n",
            (e->ts_us - start_ts) / 1000000.0, saddr, e->sport, daddr, e->dport,
-           (e->srtt_us >> 3), (e->snd_cwnd * e->mss), e->lost_out,
+           (e->srtt_us >> 3), (e->snd_cwnd * e->mss), e->total_retrans,
            tcp_int_get_tp(e), tcp_int_ival_to_util(e->intval),
-           tcp_int_ival_to_qdepth(e->intval), tcp_int_swlat_to_us(e->swlat),
-           e->sid);
+           tcp_int_ival_to_qdepth(e->intval),
+           tcp_int_hoplatecr_to_ns(e->hoplat) / 1000.0, e->hid, e->segs_out,
+           e->bytes_acked);
 }
 
 static void tcp_int_handle_lost_events(void *ctx, int cpu, __u64 lost_cnt)
@@ -669,6 +671,7 @@ static int tcp_int_get_hist_total_count(struct tcp_int_hist *hist)
 static void tcp_int_print_hist(struct tcp_int_hist *hist,
                                enum tcp_int_hist_type type)
 {
+    float pstep;
     float step;
     float cnt;
 
@@ -689,12 +692,24 @@ static void tcp_int_print_hist(struct tcp_int_hist *hist,
     case TCP_INT_HIST_TYPE_QDEPTH:
         print_log2_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, -1, "QDEPTH [KB]");
         break;
-    case TCP_INT_HIST_TYPE_SWLAT:
-        print_log2_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, -1, "SWLAT [ns]");
+    case TCP_INT_HIST_TYPE_HLAT:
+        print_log2_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, -1, "HLAT [ns]");
         break;
-    case TCP_INT_HIST_TYPE_SID:
-        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS,
-                          1 + TCP_INT_TTL_INIT, -1, -1, -1, "SWITCH HOP", true);
+    case TCP_INT_HIST_TYPE_HID:
+        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, 0, 1, -1, -1,
+                          "SWITCH HOP", true);
+        break;
+    case TCP_INT_HIST_TYPE_RXSKBLEN:
+        pstep = TCP_INT_MAX_SKBLEN /
+                (TCP_INT_MAX_SKBLEN >> TCP_INT_SKBLEN_BITSHIFT);
+        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, 0, pstep, 0, -1,
+                          "RXSKBLEN [Bytes]", false);
+        break;
+    case TCP_INT_HIST_TYPE_TXSKBLEN:
+        pstep = TCP_INT_MAX_SKBLEN /
+                (TCP_INT_MAX_SKBLEN >> TCP_INT_SKBLEN_BITSHIFT);
+        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, 0, pstep, 0, -1,
+                          "TXSKBLEN [Bytes]", false);
         break;
     default:
         break;
@@ -761,7 +776,6 @@ static int tcp_int_print_hists_pertype(enum tcp_int_hist_type type_min,
 static int tcp_int_trace(void)
 {
     tcp_int_config_value trace_cfg_val_before;
-    struct perf_buffer_opts pb_opts;
     struct perf_buffer *pb = NULL;
     int err = TCP_INT_OK;
 
@@ -771,10 +785,9 @@ static int tcp_int_trace(void)
         goto cleanup;
     }
 
-    pb_opts.sample_cb = tcp_int_handle_event;
-    pb_opts.lost_cb = tcp_int_handle_lost_events;
     pb = perf_buffer__new(tcp_int_get_fd(TCP_INT_OBJECT_MAP_EVENTS),
-                          TCP_INT_PERF_BUFFER_PAGES, &pb_opts);
+                          TCP_INT_PERF_BUFFER_PAGES, tcp_int_handle_event,
+                          tcp_int_handle_lost_events, NULL, NULL);
     err = libbpf_get_error(pb);
     if (err) {
         fprintf(stderr, "Failed to open perf buffer: %d\n", err);
@@ -796,10 +809,11 @@ static int tcp_int_trace(void)
 
     printf("Tracing TCP-INT... Hit Ctrl-C to end.\n");
 
-    printf(
-        "%11s, %15s:%5s, %15s:%5s, %8s, %8s, %6s, %8s, %7s, %12s, %9s, %3s\n\n",
-        "TIME(s)", "SIP", "SPORT", "DIP", "DPORT", "SRTT(US)", "CWND(B)",
-        "LOST", "TP(MB/s)", "UTIL(\%)", "QDEPTH(B)", "SWLAT(us)", "SID");
+    printf("%11s, %15s:%5s, %15s:%5s, %8s, %8s, %6s, %8s, %7s, %12s, %9s, %3s, "
+           "%11s, %21s\n\n",
+           "TIME(s)", "SIP", "SPORT", "DIP", "DPORT", "SRTT(US)", "CWND(B)",
+           "LOST", "TP(MB/s)", "UTIL(\%)", "QDEPTH(B)", "HLAT(us)", "HID",
+           "SOUT", "BA");
 
     while (!tcp_int_exiting) {
         err = perf_buffer__poll(pb, TCP_INT_PERF_POLL_TIMEOUT_MS);
@@ -909,7 +923,7 @@ int main(int argc, char **argv)
         rv =
             tcp_int_hist(TCP_INT_HIST_TYPE_CWND, TCP_INT_HIST_TYPE_CWND, false);
     } else if (!strcmp(argv[1], "hist-int")) {
-        rv = tcp_int_hist(TCP_INT_HIST_TYPE_SID, TCP_INT_HIST_TYPE_QDEPTH,
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_HID, TCP_INT_HIST_TYPE_QDEPTH,
                           false);
     } else if (!strcmp(argv[1], "hist-int-perid")) {
         rv = tcp_int_hist(TCP_INT_HIST_TYPE_UTIL, TCP_INT_HIST_TYPE_QDEPTH,
@@ -920,11 +934,17 @@ int main(int argc, char **argv)
     } else if (!strcmp(argv[1], "hist-util")) {
         rv =
             tcp_int_hist(TCP_INT_HIST_TYPE_UTIL, TCP_INT_HIST_TYPE_UTIL, false);
-    } else if (!strcmp(argv[1], "hist-swlat")) {
-        rv = tcp_int_hist(TCP_INT_HIST_TYPE_SWLAT, TCP_INT_HIST_TYPE_SWLAT,
-                          false);
-    } else if (!strcmp(argv[1], "hist-sid")) {
-        rv = tcp_int_hist(TCP_INT_HIST_TYPE_SID, TCP_INT_HIST_TYPE_SID, false);
+    } else if (!strcmp(argv[1], "hist-hoplat")) {
+        rv =
+            tcp_int_hist(TCP_INT_HIST_TYPE_HLAT, TCP_INT_HIST_TYPE_HLAT, false);
+    } else if (!strcmp(argv[1], "hist-hid")) {
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_HID, TCP_INT_HIST_TYPE_HID, false);
+    } else if (!strcmp(argv[1], "hist-rxskblen")) {
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_RXSKBLEN,
+                          TCP_INT_HIST_TYPE_RXSKBLEN, false);
+    } else if (!strcmp(argv[1], "hist-txskblen")) {
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_TXSKBLEN,
+                          TCP_INT_HIST_TYPE_TXSKBLEN, false);
     } else if (!strcmp(argv[1], "ecr-enable")) {
         rv = tcp_int_ecr_enable(true);
     } else if (!strcmp(argv[1], "ecr-disable")) {

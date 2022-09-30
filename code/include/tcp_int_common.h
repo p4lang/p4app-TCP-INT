@@ -6,6 +6,13 @@
 
 #include <tcp_int_opt.h>
 
+#define TCP_INT_ENABLE_DYNAMIC_TAGGING 0
+#define TCP_INT_CONG_QDEPTH_THRESH 10000
+#define TCP_INT_TAGFREQKEY_SWITCH_DEFAULT 0xf
+#define TCP_INT_TAGFREQKEY_APPLIMITED 0
+#define TCP_INT_TAGFREQKEY_CONGESTED 4
+#define TCP_INT_TAGFREQKEY_UNCONGESTED 7
+
 #define TCP_INT_BYTES_IN_KBYTE 1024
 #define TCP_INT_HIST_MAX_SLOTS 256
 #define TCP_INT_MAX_PERID_HISTS (TCP_INT_TTL_INIT + 1)
@@ -13,8 +20,39 @@
 #define TCP_INT_MAX_UTIL_SCALED 0x7f
 #define TCP_INT_MIN_QDEPTH_SCALED 0x80
 #define TCP_INT_MAX_CGROUP_PATH_LEN 128
+#define TCP_INT_SKBLEN_BITSHIFT 8
 
-#define tcp_int_swlat_to_us(x) ((x) * ((1 << TCP_INT_SWLAT_BITSHIFT) / 1000.0))
+/* HopLat is the upper 24 bits of a 32-bit unsigned that represents the sum of
+ * hop latencies in ns. On the switch, HopLat is shifted up to perform
+ * saturating addition, and then shifed back down before sending it to the next
+ * hop/host.
+ *
+ * HopLatEcr is a 16-bit encoding (compression) of the 24-bit HopLat. If HopLat
+ * overflows 15 bits, the tcp_int_hoplat_to_hoplatecr() macro shifts HopLat down
+ * 8 bits and stores it in HopLatEcr with MSB set to 1, indicating that
+ * HopLatEcr contains the shifted HopLat.
+ *
+ * N.B. These macros assume host order. The caller should convert the argument
+ * to host order before using this macro.
+ */
+#define tcp_int_hoplatecr_to_ns(x)                                             \
+    (((x)&0x8000) ? ((__u32)(x) << (TCP_INT_HLAT_BITSHIFT * 2))                \
+                  : ((__u32)(x) << TCP_INT_HLAT_BITSHIFT))
+#define tcp_int_hoplat_to_hoplatecr(x)                                         \
+    (((x)&0xff8000) ? (((x) >> TCP_INT_HLAT_BITSHIFT) | 0x8000) : (x))
+
+/* Id is a 8-bit field that identifies the most congested hop. On the switch, Id
+ * is set to the packet's current TTL value. Thus, the Id decreases as the
+ * packet traverses the hops.
+ *
+ * IdEcr is a 4-bit field that also identifies the congested hop, but in
+ * ascending order, starting from 1 for the first hop. 0 indicates uninitialized
+ * Ecr data.
+ *
+ * N.B. Because IdEcr is 4 bits (and 0 indicates uninitialized), it cannot be
+ * used for paths longer than 15 hops.
+ */
+#define tcp_int_id_to_idecr(x) (TCP_INT_TTL_INIT - (x) + 1)
 
 struct tcp_int_event {
     __u64 ts_us;
@@ -38,19 +76,24 @@ struct tcp_int_event {
     __u32 mss;
     __u32 lost_out;
     tcp_int_val intval;
-    tcp_int_id sid;
-    __u32 swlat;
-    __u32 return_swlat;
+    tcp_int_id hid;
+    __u32 hoplat;
+    __u32 return_hoplat;
+    __u32 total_retrans;
+    __u32 segs_out;
+    __u64 bytes_acked;
 } __attribute__((packed));
 ;
 
 enum tcp_int_hist_type {
     TCP_INT_HIST_TYPE_SRTT = 0,
     TCP_INT_HIST_TYPE_CWND,
-    TCP_INT_HIST_TYPE_SID,
+    TCP_INT_HIST_TYPE_HID,
     TCP_INT_HIST_TYPE_UTIL,
     TCP_INT_HIST_TYPE_QDEPTH,
-    TCP_INT_HIST_TYPE_SWLAT,
+    TCP_INT_HIST_TYPE_HLAT,
+    TCP_INT_HIST_TYPE_RXSKBLEN,
+    TCP_INT_HIST_TYPE_TXSKBLEN,
     TCP_INT_HIST_TYPE_MAX
 };
 

@@ -1,4 +1,30 @@
-# Changes to TCP-INT in version 0.1.0-alpha
+# Changes to TCP-INT in version 0.3.0-alpha
+
+## New features
+
+* Dynamic tagging policy: the eBPF specifies the tagging frequency to get timely updates without hurting performance
+* New header option fields: TagFreqKey and LinkSpeed
+* Compact encoding of Ecr fields: HopLat and IDEcr
+* Performance evaluation scripts that configure the system and run workloads with various parameters
+* Histograms of sent and received skb length
+* Makefile configures the number of CPUs at compile time (instead of manually editing the header file)
+
+## Optimizations
+
+* Removed compiler warnings
+* Avoid multiple eBPF map lookups by caching result
+
+## Maintenance
+
+* Renamed "SwitchID" to "HopID"
+* Renamed "iratio" to "tagging frequency"
+
+## Limitations
+
+* The new 4-bit IDEcr encoding represents at most 15 hops on the path
+
+
+# Changes to TCP-INT in version 0.2.0-alpha
 
 ## New features
 
