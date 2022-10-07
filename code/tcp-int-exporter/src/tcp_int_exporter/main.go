@@ -44,7 +44,7 @@ func main() {
 	flag.Parse()
 
 	if useTls && !secure.IsValidCert(caCert) {
-		log.Fatal("CA certificate '%s' does not appear to be a valid PEM certificate file", caCert)
+		log.Fatalf("CA certificate '%s' does not appear to be a valid PEM certificate file", caCert)
 	}
 
 	ctx := context.Background()

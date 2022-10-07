@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# Copyright 2022 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+echo $$ >> /sys/fs/cgroup/cgroup.tcp-int/cgroup.procs
+$@

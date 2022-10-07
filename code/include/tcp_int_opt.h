@@ -12,6 +12,7 @@ struct uint24 {
 typedef __u8 tcp_int_val;
 typedef __u8 tcp_int_id;
 typedef struct uint24 tcp_int_lat;
+typedef __u16 tcp_int_latecr;
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define be24tohl(x) (bpf_ntohl((x) << 8))
@@ -21,9 +22,10 @@ typedef struct uint24 tcp_int_lat;
 
 #define TCP_INT_UTIL_BITSHIFT 3
 #define TCP_INT_QDEPTH_BITSHIFT 13
-#define TCP_INT_SWLAT_BITSHIFT 8
+#define TCP_INT_HLAT_BITSHIFT 8
 #define TCP_INT_MAX_UTIL_SCALED 0x7f
 #define TCP_INT_MIN_QDEPTH_SCALED 0x80
 #define TCP_INT_TTL_INIT 64
+#define TCP_INT_MAX_SKBLEN 65536
 
 #endif /* __TCP_INT_OPT_H */

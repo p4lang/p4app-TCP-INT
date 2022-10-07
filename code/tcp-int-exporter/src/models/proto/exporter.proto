@@ -11,7 +11,7 @@ message TcpIntMsg {
     optional uint32 destination_port = 4;
     string source_ip = 5;
     string destination_ip = 6;
-    optional uint32 final_ttl = 7; //ttl of the packet at the switch with max int_value
+    optional uint32 final_ttl = 7; //ttl of the packet at the hop with max int_value
     uint32 congestion_window = 8; //units: bytes(cwnd * mss)
     uint32 round_trip_time = 9; //units: nano seconds
     uint32 rate = 10; //units: pkts
@@ -20,13 +20,17 @@ message TcpIntMsg {
     uint32 int_value = 13;
     uint32 latencies_outgoing_sum = 14; //units: nano seconds
     uint32 latencies_return_sum = 15; //units: nano seconds
-    uint32 queue_depth = 16; //qdepth when pkts was dequeued in the switch with highest queue depth
+    uint32 queue_depth = 16; //qdepth when pkts was dequeued in the hop with highest queue depth
     uint32 bandwidth = 17; //units: MB/s
-    double utilization = 18; //units: % utilization averaged over 1 second in the switch with highest link utilization
+    double utilization = 18; //units: % utilization averaged over 1 second in the hop with highest link utilization
     uint32 count = 19; //required for druid not populated by tcpint client
     string timestamp = 20; //required for druid not populated by tcpint client
     optional uint32 initial_ttl = 21; //original ttl
-    uint32 lost_out = 22; //number of lost packets
+    uint32 lost_out = 22; //lost packets(instantaneous)
+    uint32 segs_out = 23; //number of segments out
+    uint64 bytes_acked = 24; //number of bytes acked
+    uint32 total_retrans = 25; //total lost packets(cumulative)
+    optional uint32 hop_id = 26;
 }
 
 message TcpIntMsgs {
