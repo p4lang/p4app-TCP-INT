@@ -38,8 +38,8 @@ static const char *tcp_int_doc =
     "start histograming (INT-related histograms)\n"
     "    tcp_int hist-int-perid                         # Enables tcp-int and "
     "start histograming (INT-related histograms per hop ID)\n"
-    "    tcp_int hist-[rtt,cwnd,qdepth,util,hoplat,\n"
-    "                  hid,rxskblen,txskblen]           # Enables tcp-int and "
+    "    tcp_int hist-[rtt,cwnd,qdepth,util,availbw,\n"
+    "                  hoplat,hid,rxskblen,txskblen]    # Enables tcp-int and "
     "start histograming (selected histogram)\n"
     "    tcp_int ecr-enable                             # Enables echo replies "
     "(default = enabled)\n"
@@ -55,6 +55,8 @@ static const char *tcp_int_doc =
     "BPF programs\n"
     "    tcp_int unload -d                              # Unloads all tcp_int "
     "BPF programs with debug enabled\n"
+    "    tcp_int version                                # Prints compile time, "
+    "version and current branch name"
     "    tcp_int help                                   # Prints help "
     "message\n";
 
@@ -468,6 +470,13 @@ static int tcp_int_unload(void)
     return err;
 }
 
+static void tcp_int_version(void)
+{
+    printf("Compile time: %s\n", GIT_COMPILE_TIME);
+    printf("Version: %s\n", GIT_VERSION);
+    printf("Branch: %s\n", GIT_BRANCH);
+}
+
 static int tcp_int_load(const char *cg_path)
 {
     struct tcp_int_bpf *tcp_int_obj;
@@ -583,14 +592,14 @@ static void tcp_int_handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 
     inet_ntop(e->family, &e->saddr, saddr, sizeof(saddr));
     inet_ntop(e->family, &e->daddr, daddr, sizeof(daddr));
-    printf("%11.6f, %15s:%5d, %15s:%5d, %8d, %8d, %6d, %8lld, %7u, %12u, %9f, "
-           "%3d, %11d, %21lld\n",
+    printf("%11.6f, %15s:%5d, %15s:%5d, %8d, %8d, %6d, %8lld, %14d, %8u, %9f, "
+           "%3d, %11d, %21lld, %10d\n",
            (e->ts_us - start_ts) / 1000000.0, saddr, e->sport, daddr, e->dport,
            (e->srtt_us >> 3), (e->snd_cwnd * e->mss), e->total_retrans,
-           tcp_int_get_tp(e), tcp_int_ival_to_util(e->intval),
+           tcp_int_get_tp(e), (tcp_int_ival_to_avail_bw(e->intval) * 1000),
            tcp_int_ival_to_qdepth(e->intval),
            tcp_int_hoplatecr_to_ns(e->hoplat) / 1000.0, e->hid, e->segs_out,
-           e->bytes_acked);
+           e->bytes_acked, tcp_int_unmap_link_speed(e->link_speed));
 }
 
 static void tcp_int_handle_lost_events(void *ctx, int cpu, __u64 lost_cnt)
@@ -672,8 +681,6 @@ static void tcp_int_print_hist(struct tcp_int_hist *hist,
                                enum tcp_int_hist_type type)
 {
     float pstep;
-    float step;
-    float cnt;
 
     printf("\n");
     switch (type) {
@@ -683,11 +690,9 @@ static void tcp_int_print_hist(struct tcp_int_hist *hist,
     case TCP_INT_HIST_TYPE_CWND:
         print_log2_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, -1, "CWND [pkts]");
         break;
-    case TCP_INT_HIST_TYPE_UTIL:
-        cnt = (TCP_INT_MAX_UTIL_PERCENT >> TCP_INT_UTIL_BITSHIFT) + 1;
-        step = TCP_INT_MAX_UTIL_PERCENT / cnt;
-        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, 0, step, 0,
-                          cnt - 1, "BW UTIL. [\%]", false);
+    case TCP_INT_HIST_TYPE_AVAILBW:
+        print_linear_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, 0, 1, 0, -1,
+                          "AVAIL BW[Gbps]", false);
         break;
     case TCP_INT_HIST_TYPE_QDEPTH:
         print_log2_hist(hist->slots, TCP_INT_HIST_MAX_SLOTS, -1, "QDEPTH [KB]");
@@ -737,10 +742,10 @@ static int tcp_int_print_hists_perid(enum tcp_int_hist_type type_min,
                 break;
             }
             if (j == type_min) {
-                printf("\n\n-- SWITCH HOP %02d "
+                printf("\n\n-- SWITCH HOP %2d "
                        "-------------------------------------------------------"
                        "------",
-                       (1 + TCP_INT_TTL_INIT - i));
+                       i);
             }
             tcp_int_print_hist(&hists.hist[i], j);
         }
@@ -809,11 +814,11 @@ static int tcp_int_trace(void)
 
     printf("Tracing TCP-INT... Hit Ctrl-C to end.\n");
 
-    printf("%11s, %15s:%5s, %15s:%5s, %8s, %8s, %6s, %8s, %7s, %12s, %9s, %3s, "
-           "%11s, %21s\n\n",
+    printf("%11s, %15s:%5s, %15s:%5s, %8s, %8s, %6s, %8s, %14s, %8s, %9s, %3s, "
+           "%11s, %21s, %8s\n\n",
            "TIME(s)", "SIP", "SPORT", "DIP", "DPORT", "SRTT(US)", "CWND(B)",
-           "LOST", "TP(MB/s)", "UTIL(\%)", "QDEPTH(B)", "HLAT(us)", "HID",
-           "SOUT", "BA");
+           "LOST", "TP(MB/s)", "AVAILBW(Mb/s)", "QDEPTH(B)", "HLAT(us)", "HID",
+           "SOUT", "BA", "LINKSPEED(Gb/s)");
 
     while (!tcp_int_exiting) {
         err = perf_buffer__poll(pb, TCP_INT_PERF_POLL_TIMEOUT_MS);
@@ -926,14 +931,14 @@ int main(int argc, char **argv)
         rv = tcp_int_hist(TCP_INT_HIST_TYPE_HID, TCP_INT_HIST_TYPE_QDEPTH,
                           false);
     } else if (!strcmp(argv[1], "hist-int-perid")) {
-        rv = tcp_int_hist(TCP_INT_HIST_TYPE_UTIL, TCP_INT_HIST_TYPE_QDEPTH,
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_AVAILBW, TCP_INT_HIST_TYPE_QDEPTH,
                           true);
     } else if (!strcmp(argv[1], "hist-qdepth")) {
         rv = tcp_int_hist(TCP_INT_HIST_TYPE_QDEPTH, TCP_INT_HIST_TYPE_QDEPTH,
                           false);
-    } else if (!strcmp(argv[1], "hist-util")) {
-        rv =
-            tcp_int_hist(TCP_INT_HIST_TYPE_UTIL, TCP_INT_HIST_TYPE_UTIL, false);
+    } else if (!strcmp(argv[1], "hist-availbw")) {
+        rv = tcp_int_hist(TCP_INT_HIST_TYPE_AVAILBW, TCP_INT_HIST_TYPE_AVAILBW,
+                          false);
     } else if (!strcmp(argv[1], "hist-hoplat")) {
         rv =
             tcp_int_hist(TCP_INT_HIST_TYPE_HLAT, TCP_INT_HIST_TYPE_HLAT, false);
@@ -953,6 +958,8 @@ int main(int argc, char **argv)
         rv = tcp_int_events_enable(true);
     } else if (!strcmp(argv[1], "events-disable")) {
         rv = tcp_int_events_enable(false);
+    } else if (!strcmp(argv[1], "version")) {
+        tcp_int_version();
     } else {
         show_help();
     }

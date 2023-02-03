@@ -9,14 +9,22 @@ BPF_OBJS = $(@:.skel.h=.bpf.o)
 PREFIX ?= /usr/local
 INSTALLPATH = $(PREFIX)/lib/bpf/tcp-int
 LIBS = -lbpf
+
+GIT_COMPILE_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GIT_VERSION := "$(shell git describe --abbrev=12 --tags)"
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 CC := gcc
-CFLAGS :=-DTCP_INT_NUM_CPUS=$(shell nproc --all)
+
+CFLAGS += -DTCP_INT_NUM_CPUS=$(shell nproc --all)
+
+export VERSION_FLAGS=-DGIT_VERSION="\"$(GIT_VERSION)\"" -DGIT_COMPILE_TIME="\"$(GIT_COMPILE_TIME)\"" -DGIT_BRANCH="\"$(GIT_BRANCH)\""
+
 .PHONY: clean
 
 all: $(USER_TARGETS)
 
 $(USER_TARGETS):  %: %.c $(wildcard ../include/*.h) $(SKELETON_HEADERS)
-	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -I../include -I. -o $@ $< $(LIBS)
+	$(CC) -Wall $(CFLAGS) $(VERSION_FLAGS) $(LDFLAGS) -I../include -I. -o $@ $< $(LIBS)
 
 $(SKELETON_HEADERS): %.skel.h: %.bpf.c $(wildcard ../include/*.h)
 	$(eval $@_BPF_OBJ := $(@:.skel.h=.bpf.o))

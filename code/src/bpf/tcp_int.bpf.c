@@ -122,6 +122,7 @@ static inline void tcp_int_add_tcpopt(struct bpf_sock_ops *skops,
     iopt.intvalecr = istate->intvalecr;
     iopt.idecr = istate->idecr;
     iopt.hoplatecr = istate->hoplatecr;
+    iopt.linkspeedecr = istate->linkspeedecr;
 
 #if TCP_INT_ENABLE_DYNAMIC_TAGGING
     if (skops->packets_out < 1)
@@ -159,8 +160,8 @@ static void tcp_int_update_hists(struct bpf_sock_ops *skops,
             val = skops->snd_cwnd;
             linear = false;
             break;
-        case TCP_INT_HIST_TYPE_UTIL:
-            val = tcp_int_ival_to_util_scaled(iopt->intvalecr);
+        case TCP_INT_HIST_TYPE_AVAILBW:
+            val = tcp_int_ival_to_avail_bw(iopt->intvalecr);
             linear = true;
             break;
         case TCP_INT_HIST_TYPE_QDEPTH:
@@ -212,6 +213,7 @@ static void tcp_int_send_event(struct bpf_sock_ops *skops,
     event.segs_out = skops->segs_out;
     event.bytes_acked = skops->bytes_acked;
     event.total_retrans = skops->total_retrans;
+    event.link_speed = iopt->linkspeedecr;
     bpf_perf_event_output(skops, &map_tcp_int_events, BPF_F_CURRENT_CPU, &event,
                           sizeof(event));
 }
@@ -269,6 +271,7 @@ static inline void tcp_int_process_tcpopt(struct bpf_sock_ops *skops,
         istate->idecr = tcp_int_id_to_idecr(iopt.id);
         istate->hoplatecr =
             tcp_int_hoplat_to_hoplatecr(be24tohl(iopt.hoplat.u24));
+        istate->linkspeedecr = iopt.linkspeed;
         istate->pending_ecr = true;
     }
 

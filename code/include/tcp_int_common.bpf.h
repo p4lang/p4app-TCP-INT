@@ -20,6 +20,7 @@ struct tcp_int_state {
     tcp_int_id idecr;         /* ID to be echoed back (network order) */
     __u32 qdepth;             /* Queue depth in data path */
     tcp_int_latecr hoplatecr; /* Sum of hop latencies on data path */
+    __u8 linkspeedecr;        /* Link speed to be echoed back */
 };
 
 /* Attaches INT state to socket */
