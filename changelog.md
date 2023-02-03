@@ -1,3 +1,16 @@
+
+# Changes to TCP-INT in version 0.4.0-alpha
+
+## New features
+
+ * Link speed
+ * Available bandwidth
+
+## Optimizations
+
+ * New Version option to display currently running tcp-int version
+ * Removed link utilzation feature
+
 # Changes to TCP-INT in version 0.3.0-alpha
 
 ## New features

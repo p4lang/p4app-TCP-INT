@@ -16,8 +16,6 @@
 #define TCP_INT_BYTES_IN_KBYTE 1024
 #define TCP_INT_HIST_MAX_SLOTS 256
 #define TCP_INT_MAX_PERID_HISTS (TCP_INT_TTL_INIT + 1)
-#define TCP_INT_MAX_UTIL_PERCENT 100
-#define TCP_INT_MAX_UTIL_SCALED 0x7f
 #define TCP_INT_MIN_QDEPTH_SCALED 0x80
 #define TCP_INT_MAX_CGROUP_PATH_LEN 128
 #define TCP_INT_SKBLEN_BITSHIFT 8
@@ -52,7 +50,7 @@
  * N.B. Because IdEcr is 4 bits (and 0 indicates uninitialized), it cannot be
  * used for paths longer than 15 hops.
  */
-#define tcp_int_id_to_idecr(x) (TCP_INT_TTL_INIT - (x) + 1)
+#define tcp_int_id_to_idecr(x) (TCP_INT_TTL_INIT - (x))
 
 struct tcp_int_event {
     __u64 ts_us;
@@ -79,9 +77,10 @@ struct tcp_int_event {
     tcp_int_id hid;
     __u32 hoplat;
     __u32 return_hoplat;
-    __u32 total_retrans;
     __u32 segs_out;
     __u64 bytes_acked;
+    __u32 total_retrans;
+    __u8 link_speed;
 } __attribute__((packed));
 ;
 
@@ -89,7 +88,7 @@ enum tcp_int_hist_type {
     TCP_INT_HIST_TYPE_SRTT = 0,
     TCP_INT_HIST_TYPE_CWND,
     TCP_INT_HIST_TYPE_HID,
-    TCP_INT_HIST_TYPE_UTIL,
+    TCP_INT_HIST_TYPE_AVAILBW,
     TCP_INT_HIST_TYPE_QDEPTH,
     TCP_INT_HIST_TYPE_HLAT,
     TCP_INT_HIST_TYPE_RXSKBLEN,
@@ -125,24 +124,43 @@ static inline bool tcp_int_ival_is_qdepth(tcp_int_val ival)
     return (ival >= TCP_INT_MIN_QDEPTH_SCALED);
 }
 
-static inline __u32 tcp_int_ival_to_util_scaled(tcp_int_val ival)
-{
-    return tcp_int_ival_is_qdepth(ival) ? TCP_INT_MAX_UTIL_SCALED : ival;
-}
-
 static inline __u32 tcp_int_ival_to_qdepth_scaled(tcp_int_val ival)
 {
-    return tcp_int_ival_is_qdepth(ival) ? (ival & TCP_INT_MAX_UTIL_SCALED) : 0;
-}
-
-static inline __u32 tcp_int_ival_to_util(tcp_int_val ival)
-{
-    return tcp_int_ival_is_qdepth(ival) ? 100 : (ival << TCP_INT_UTIL_BITSHIFT);
+    return tcp_int_ival_is_qdepth(ival) ? (ival & TCP_INT_MIN_AVAILBW_SCALED)
+                                        : 0;
 }
 
 static inline __u32 tcp_int_ival_to_qdepth(tcp_int_val ival)
 {
     return tcp_int_ival_to_qdepth_scaled(ival) << TCP_INT_QDEPTH_BITSHIFT;
+}
+
+static inline __u32 tcp_int_ival_to_avail_bw(tcp_int_val ival)
+{
+    return tcp_int_ival_is_qdepth(ival) ? 0
+                                        : (TCP_INT_MIN_AVAILBW_SCALED - ival);
+}
+
+static inline __u32 tcp_int_unmap_link_speed(__u8 mapped_link_speed)
+{
+    switch (mapped_link_speed) {
+    case 1:
+        return 10;
+    case 2:
+        return 25;
+    case 3:
+        return 40;
+    case 4:
+        return 50;
+    case 5:
+        return 100;
+    case 6:
+        return 200;
+    case 7:
+        return 400;
+    default:
+        return 0;
+    }
 }
 
 #endif /* __TCP_INT_COMMON_H */

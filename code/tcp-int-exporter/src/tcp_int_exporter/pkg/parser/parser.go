@@ -37,13 +37,14 @@ func Parse(data []byte) (*pb.TcpIntMsg, error) {
 	segsOutSize := uint32Size
 	bytesAckedSize := uint64Size
 	totalRetransSize := uint32Size
+	linkSpeedSize := uint8Size
 
 	perfEventSize := timestampSize + familySize + sportSize +
 		dportSize + saddrSize + daddrSize + cwndSize +
 		srttSize + rateDeliveredSize + rateIntervalSize +
 		mssSize + hopLatSize + returnHopLatSize + intvalSize +
 		hopIdSize + lostOutSize + segsOutSize + bytesAckedSize +
-		totalRetransSize
+		totalRetransSize + linkSpeedSize
 
 	if len(data) < perfEventSize {
 		return nil, fmt.Errorf("invalid data format: %v", data)
@@ -86,6 +87,8 @@ func Parse(data []byte) (*pb.TcpIntMsg, error) {
 	bytesAcked := binary.LittleEndian.Uint64(data[offset:(offset + bytesAckedSize)])
 	offset = offset + bytesAckedSize
 	totalRetrans := binary.LittleEndian.Uint32(data[offset:(offset + totalRetransSize)])
+	offset = offset + totalRetransSize
+	linkSpeed := uint32(data[offset])
 	msg := &pb.TcpIntMsg{
 		TsUs:                 tsUs,
 		Family:               family,
@@ -111,6 +114,8 @@ func Parse(data []byte) (*pb.TcpIntMsg, error) {
 		BytesAcked:           bytesAcked,
 		TotalRetrans:         totalRetrans,
 		HopId:                utils.NewUInt32(hopId),
+		AvailableBandwidth:   parseAvailableBandwidth(intVal),
+		LinkSpeed:            parseMappedLinkSpeed(linkSpeed),
 	}
 
 	//log.Printf("msg: %+v \n", msg)
@@ -143,4 +148,35 @@ func parseUtilizationPercentage(intValue uint32) float64 {
 		ut = float64(intValue << 3)
 	}
 	return ut
+}
+
+func parseAvailableBandwidth(intValue uint32) uint32 {
+	var abw uint32
+	if intValue >= 0x80 {
+		abw = 0
+	} else {
+		abw = (uint32((0x80-1)-intValue) * 1000) / 8
+	}
+	return abw
+}
+
+func parseMappedLinkSpeed(linkSpeed uint32) uint32 {
+	switch linkSpeed {
+	case 1:
+		return 10
+	case 2:
+		return 25
+	case 3:
+		return 40
+	case 4:
+		return 50
+	case 5:
+		return 100
+	case 6:
+		return 200
+	case 7:
+		return 400
+	default:
+		return 0
+	}
 }

@@ -31,6 +31,8 @@ message TcpIntMsg {
     uint64 bytes_acked = 24; //number of bytes acked
     uint32 total_retrans = 25; //total lost packets(cumulative)
     optional uint32 hop_id = 26;
+    uint32 available_bandwidth = 27; //units: MB/s
+    uint32 link_speed = 28; //units: Gb/s
 }
 
 message TcpIntMsgs {

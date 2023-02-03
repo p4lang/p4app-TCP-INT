@@ -30,6 +30,9 @@ var (
 	timeout     time.Duration
 	useTls      bool
 	caCert      string
+	version     string
+	compileTime string
+	gitBranch   string
 )
 
 func main() {
@@ -42,6 +45,10 @@ func main() {
 	flag.BoolVar(&useTls, "use-tls", true, "Connect to server using TLS")
 	flag.StringVar(&caCert, "ca-cert", "/ets/ssl/certs/tcp_int_ca_cert.pem", "Certificate of the CA that signed the collector's cert")
 	flag.Parse()
+
+	log.Printf("Compile Time: %s\n", compileTime)
+	log.Printf("Version: %s\n", version)
+	log.Printf("Git Branch: %s\n", gitBranch)
 
 	if useTls && !secure.IsValidCert(caCert) {
 		log.Fatalf("CA certificate '%s' does not appear to be a valid PEM certificate file", caCert)
